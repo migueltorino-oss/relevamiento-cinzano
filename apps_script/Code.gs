@@ -100,6 +100,159 @@ function yaExiste_(h, id) {
   return false;
 }
 
+// ===================== RESUMEN (hoja "Resumen", ex "Hoja 1") =====================
+// Cartera por vendedor sacada del padrón de Gescom (rutas de preventa con día de visita).
+// Es una foto: para refrescarla, regenerar esta tabla y volver a correr armarResumen().
+var UNIVERSO_FECHA = '14/08/2026';
+var UNIVERSO = [
+  [1, 'ROCIO MORE', 'JUAN', 214], [2, 'MAGALI BADER', 'JUAN', 227], [3, 'SOFIA AQUINO', 'JUAN', 231],
+  [4, 'SAMANTA MACHADO', 'JUAN', 231], [5, 'VALENTINA GOMEZ', 'JUAN', 202], [6, 'SILVIA BOUTET', 'JUAN', 223],
+  [7, 'ANGELA ECHEVERRIA', 'JUAN', 212], [8, 'AILEN BLANCO', 'JUAN', 217], [9, 'PILAR FERNANDEZ', 'JUAN', 205],
+  [10, 'IVANA CASTILLO', 'JUAN', 212], [11, 'LORENA ESCOBAR', 'JUAN', 220], [12, 'FIAMA JARA', 'JUAN', 212],
+  [24, 'KAF DANIEL SANCHEZ', 'LUCIA', 83], [25, 'KAF ROMINA MERELLO', 'LUCIA', 80], [26, 'Kaf Gaby Peralta', 'LUCIA', 80],
+  [27, 'Kaf Maria Jose Minio', 'LUCIA', 81], [28, 'VENDEDOR 28 KAF', 'LUCIA', 154],
+  [31, 'MARIA VICTORIA ZERDA', 'FLOR', 210], [32, 'CAROLINA ECHEVERRIA', 'FLOR', 227], [33, 'SOFIA CATIVIELA', 'FLOR', 208],
+  [34, 'NARA GONZALEZ', 'FLOR', 213], [35, 'AGUSTINA COCA', 'FLOR', 230], [37, 'GIMENA ESCUDERO', 'FLOR', 202],
+  [38, 'NAHUEL BAETA', 'FLOR', 221], [44, 'BELEN ROMERO', 'FLOR', 220], [45, 'NATALIA POLITO', 'FLOR', 243]
+];
+
+var ROJO = '#b32330', CREMA = '#faf7f2', BORDE = '#e5ddd5', GRIS = '#8a817c';
+
+/**
+ * Arma el tablero de seguimiento en la primera hoja. Todo con FÓRMULAS: se actualiza
+ * solo a medida que entran relevamientos, no hay que volver a correrlo.
+ * Correr desde el editor: elegir armarResumen y apretar Ejecutar.
+ */
+function armarResumen() {
+  var ss = ID_PLANILLA ? SpreadsheetApp.openById(ID_PLANILLA) : SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('Resumen') || ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
+  if (!sh) sh = ss.insertSheet('Resumen', 0);
+  sh.setName('Resumen');
+  ss.setActiveSheet(sh);
+  ss.moveActiveSheet(1);
+  sh.clear();
+  sh.clearFormats();
+  var filtros = sh.getFilter();
+  if (filtros) filtros.remove();
+
+  hoja_();                                       // asegura que exista la pestaña Respuestas
+  var R = "'" + HOJA + "'!";                     // prefijo de referencia a la hoja de datos
+  var totalCartera = 0;
+  for (var i = 0; i < UNIVERSO.length; i++) totalCartera += UNIVERSO[i][3];
+
+  var relevados = 'IFERROR(COUNTA(UNIQUE(FILTER(' + R + 'E2:E,' + R + 'E2:E<>""))),0)';
+  var pintadas = [];   // [rango, color de fondo, negrita, color de letra]
+
+  function banda(fila, texto) {
+    sh.getRange(fila, 1).setValue(texto);
+    pintadas.push([fila + ':' + fila, ROJO, true, '#ffffff']);
+  }
+  function encabezados(fila, cols) {
+    sh.getRange(fila, 1, 1, cols.length).setValues([cols]);
+    pintadas.push([fila + ':' + fila, CREMA, true, '#2b2320']);
+  }
+
+  // ---------- título ----------
+  sh.getRange('A1').setValue('RELEVAMIENTO CINZANO — seguimiento');
+  sh.getRange('A1').setFontSize(16).setFontWeight('bold').setFontColor(ROJO);
+  sh.getRange('A2').setValue('Último relevamiento cargado');
+  sh.getRange('B2').setFormula('=IFERROR(TEXT(MAX(' + R + 'T2:T),"dd/MM/yyyy HH:mm"),"todavía no hay datos")');
+  sh.getRange('D2').setValue('Cartera del padrón al ' + UNIVERSO_FECHA);
+  sh.getRange('A2:F2').setFontColor(GRIS);
+
+  // ---------- avance ----------
+  banda(4, 'AVANCE DEL CENSO');
+  var avance = [
+    ['Clientes relevados', '=' + relevados, 'de ' + totalCartera + ' de cartera', '=IFERROR(B5/' + totalCartera + ',0)'],
+    ['Faltan por relevar', '=' + totalCartera + '-B5', '', '=IFERROR(1-D5,1)'],
+    ['Relevamientos cargados', '=COUNTA(' + R + 'E2:E)', 'incluye recargas del mismo cliente', ''],
+    ['Vendedores que arrancaron', '=IFERROR(COUNTA(UNIQUE(FILTER(' + R + 'C2:C,' + R + 'C2:C<>""))),0)', 'de ' + UNIVERSO.length, ''],
+    ['Relevados hoy', '=IFERROR(SUMPRODUCT((INT(' + R + 'A2:A)=TODAY())*(' + R + 'A2:A<>"")),0)', '', ''],
+    ['Relevados últimos 7 días', '=IFERROR(SUMPRODUCT((INT(' + R + 'A2:A)>=TODAY()-6)*(' + R + 'A2:A<>"")),0)', '', '']
+  ];
+  sh.getRange(5, 1, avance.length, 4).setValues(avance);
+  sh.getRange('D5:D6').setNumberFormat('0.0%');
+
+  // ---------- hallazgos ----------
+  banda(12, 'QUÉ SE ENCONTRÓ EN LA CALLE');
+  var hallazgos = [
+    ['Clientes con algún Cinzano', '=COUNTIF(' + R + 'P2:P,"SI")', '=IFERROR(B13/' + relevados + ',0)'],
+    ['Clientes sin nada de Cinzano', '=COUNTIF(' + R + 'P2:P,"NO")', '=IFERROR(B14/' + relevados + ',0)'],
+    ['Clientes que nos compraron', '=COUNTIF(' + R + 'Q2:Q,"SI")', '=IFERROR(B15/' + relevados + ',0)'],
+    ['Clientes con foto', '=COUNTIF(' + R + 'S2:S,"https://*")', '=IFERROR(B16/' + relevados + ',0)']
+  ];
+  sh.getRange(13, 1, hallazgos.length, 3).setValues(hallazgos);
+  sh.getRange('C13:C16').setNumberFormat('0.0%');
+
+  // ---------- artículos ----------
+  banda(18, 'PRESENCIA Y PRECIOS DE GÓNDOLA POR ARTÍCULO');
+  encabezados(19, ['Artículo', 'Clientes que lo tienen', '% de los relevados', 'Precio promedio', 'Mínimo', 'Máximo']);
+  var arts = [];
+  for (var a = 0; a < ARTICULOS.length; a++) {
+    var colTiene = String.fromCharCode(72 + a * 2);      // H, J, L, N
+    var colPrecio = String.fromCharCode(73 + a * 2);     // I, K, M, O
+    var f = 20 + a;
+    arts.push([
+      ARTICULOS[a].nombre,
+      '=COUNTIF(' + R + colTiene + '2:' + colTiene + ',"SI")',
+      '=IFERROR(B' + f + '/' + relevados + ',0)',
+      '=IFERROR(AVERAGEIF(' + R + colPrecio + '2:' + colPrecio + ',">0"),"—")',
+      '=IFERROR(MIN(FILTER(' + R + colPrecio + '2:' + colPrecio + ',' + R + colPrecio + '2:' + colPrecio + '>0)),"—")',
+      '=IFERROR(MAX(' + R + colPrecio + '2:' + colPrecio + '),"—")'
+    ]);
+  }
+  sh.getRange(20, 1, arts.length, 6).setValues(arts);
+  sh.getRange(20, 3, arts.length, 1).setNumberFormat('0.0%');
+  sh.getRange(20, 4, arts.length, 3).setNumberFormat('$#,##0.00');
+
+  // ---------- por vendedor ----------
+  var f0 = 20 + ARTICULOS.length + 2;
+  banda(f0, 'AVANCE POR VENDEDOR');
+  encabezados(f0 + 1, ['Vendedor', 'Equipo', 'Cartera', 'Relevados', '% avance', 'Con Cinzano', 'Nos compró']);
+  var filas = [];
+  for (var v = 0; v < UNIVERSO.length; v++) {
+    var u = UNIVERSO[v], fila = f0 + 2 + v;
+    filas.push([
+      u[1], u[2], u[3],
+      '=IFERROR(COUNTA(UNIQUE(FILTER(' + R + 'E2:E,' + R + 'C2:C=' + u[0] + '))),0)',
+      '=IFERROR(D' + fila + '/C' + fila + ',0)',
+      '=COUNTIFS(' + R + 'C2:C,' + u[0] + ',' + R + 'P2:P,"SI")',
+      '=COUNTIFS(' + R + 'C2:C,' + u[0] + ',' + R + 'Q2:Q,"SI")'
+    ]);
+  }
+  var fTot = f0 + 2 + UNIVERSO.length;
+  filas.push(['TOTAL', '', totalCartera,
+    '=SUM(D' + (f0 + 2) + ':D' + (fTot - 1) + ')',
+    '=IFERROR(D' + fTot + '/C' + fTot + ',0)',
+    '=SUM(F' + (f0 + 2) + ':F' + (fTot - 1) + ')',
+    '=SUM(G' + (f0 + 2) + ':G' + (fTot - 1) + ')']);
+  sh.getRange(f0 + 2, 1, filas.length, 7).setValues(filas);
+  sh.getRange(f0 + 2, 5, filas.length, 1).setNumberFormat('0.0%');
+  pintadas.push([fTot + ':' + fTot, CREMA, true, '#2b2320']);
+
+  // ---------- comentarios ----------
+  var fc = fTot + 2;
+  banda(fc, 'COMENTARIOS DE LOS VENDEDORES (los más nuevos primero)');
+  encabezados(fc + 1, ['Fecha', 'Vendedor', 'Cliente', 'Comentario']);
+  sh.getRange(fc + 2, 1).setFormula(
+    '=IFERROR(QUERY(' + R + 'A2:R,"select Col1, Col4, Col6, Col18 where Col18 is not null and Col18 <> \'\' ' +
+    'order by Col1 desc limit 100",0),"Todavía no hay comentarios cargados")');
+  sh.getRange(fc + 2, 1, 200, 1).setNumberFormat('dd/MM/yyyy');
+
+  // ---------- formato general ----------
+  for (var p = 0; p < pintadas.length; p++) {
+    var rr = sh.getRange(pintadas[p][0]);
+    rr.setBackground(pintadas[p][1]).setFontWeight(pintadas[p][2] ? 'bold' : 'normal').setFontColor(pintadas[p][3]);
+  }
+  var anchos = [300, 130, 210, 130, 110, 130, 130];
+  for (var c = 0; c < anchos.length; c++) sh.setColumnWidth(c + 1, anchos[c]);
+  sh.getRange(1, 1, sh.getMaxRows(), 7).setVerticalAlignment('middle');
+  sh.setFrozenRows(2);
+  if (sh.getMaxColumns() > 7) sh.deleteColumns(8, sh.getMaxColumns() - 7);
+  SpreadsheetApp.flush();
+  return 'Resumen armado (' + (fc + 2) + ' filas)';
+}
+
 function doPost(e) {
   try {
     var p;
