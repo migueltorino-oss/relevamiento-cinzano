@@ -68,6 +68,10 @@ function hoja_() {
     // Fecha y Recibido se escriben como Date reales: el formato lo fija la columna,
     // así no dependen de la configuración regional de la planilla.
     h.getRange(2, 1, h.getMaxRows() - 1, 1).setNumberFormat('dd/MM/yyyy');
+    // Hora como TEXTO: si no, Sheets interpreta "16:43" como valor de hora y al leerlo
+    // por API vuelve como fecha 1899-12-30 desfasada por el huso (bajar_respuestas.js
+    // igual lo recupera, pero así queda limpio de entrada).
+    h.getRange(2, 2, h.getMaxRows() - 1, 1).setNumberFormat('@');
     h.getRange(2, colRecibido_(), h.getMaxRows() - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
     h.setColumnWidth(6, 220);
     h.setColumnWidth(7, 240);
