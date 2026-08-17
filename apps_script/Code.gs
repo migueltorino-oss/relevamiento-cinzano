@@ -60,10 +60,46 @@ function planilla_() {
   return ID_PLANILLA ? SpreadsheetApp.openById(ID_PLANILLA) : SpreadsheetApp.getActiveSpreadsheet();
 }
 
+// Cada formulario guarda en SU PROPIO archivo de Google Sheets. El id se guarda en las
+// propiedades del script la primera vez y se reusa siempre; si el archivo no existe
+// todavía, se crea solo (no hay que crearlo a mano ni hardcodear ningún id).
+// Sin `formulario` (el caso de Cinzano) usa la planilla original.
+function planillaDe_(formId, nombreArchivo) {
+  if (!formId) return planilla_();
+  var props = PropertiesService.getScriptProperties();
+  var clave = 'planilla_' + String(formId);
+  var id = props.getProperty(clave);
+  if (id) {
+    try { return SpreadsheetApp.openById(id); }
+    catch (err) { props.deleteProperty(clave); }   // la borraron: se crea de nuevo
+  }
+  var ss = SpreadsheetApp.create(nombreArchivo || ('Relevamiento ' + formId));
+  props.setProperty(clave, ss.getId());
+  return ss;
+}
+
+// Lo que se sabe de cada formulario, para poder pasarle el link al usuario.
+function planillasConocidas_() {
+  var props = PropertiesService.getScriptProperties().getProperties();
+  var out = [];
+  for (var k in props) {
+    if (k.indexOf('planilla_') !== 0) continue;
+    var info = { formulario: k.slice(9), id: props[k] };
+    try {
+      var ss = SpreadsheetApp.openById(props[k]);
+      info.nombre = ss.getName();
+      info.url = ss.getUrl();
+      info.hojas = ss.getSheets().map(function (h) { return h.getName(); });
+    } catch (err) { info.error = 'no se pudo abrir'; }
+    out.push(info);
+  }
+  return out;
+}
+
 // Devuelve la pestaña, creándola con su encabezado y formatos la primera vez.
-// Sirve para cualquier formulario: el encabezado se lo pasa quien la llama.
-function hojaDe_(nombre, head) {
-  var ss = planilla_();
+// Sirve para cualquier formulario: el encabezado y el archivo se los pasa quien la llama.
+function hojaDe_(nombre, head, ss) {
+  ss = ss || planilla_();
   var h = ss.getSheetByName(nombre);
   if (!h) h = ss.insertSheet(nombre);
   if (h.getLastRow() === 0) {
@@ -80,6 +116,14 @@ function hojaDe_(nombre, head) {
     h.getRange(2, head.length - 1, h.getMaxRows() - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
     h.setColumnWidth(6, 220);
     h.setColumnWidth(7, 240);
+    // en un archivo nuevo, la "Hoja 1" que crea Google queda vacía y molestando
+    var hojas = ss.getSheets();
+    for (var i = 0; i < hojas.length; i++) {
+      var otra = hojas[i];
+      if (otra.getSheetId() !== h.getSheetId() && otra.getLastRow() === 0 && hojas.length > 1) {
+        try { ss.deleteSheet(otra); } catch (err) {}
+      }
+    }
   }
   return h;
 }
@@ -291,7 +335,7 @@ function doPost(e) {
     // Va por POST para no pasar la clave en la URL. `hoja` elige el formulario.
     if (p && p.accion === 'export') {
       var nomb = nombreHoja_(p.hoja || HOJA);
-      var ssx = planilla_();
+      var ssx = planillaDe_(p.formulario, p.archivo);
       var hx = ssx.getSheetByName(nomb);
       if (!hx) return json_({ ok: true, encabezado: [], filas: [], vacia: true });
       var nCols = hx.getLastColumn();
@@ -433,7 +477,8 @@ function altaGenerica_(p) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) return json_({ ok: false, error: 'servidor ocupado', reintentar: true });
   try {
-    var h = hojaDe_(nomb, head);
+    var ss = planillaDe_(p.formulario, p.archivo);
+    var h = hojaDe_(nomb, head, ss);
     // Si el formulario cambió de columnas, no mezclar datos viejos con nuevos.
     var actual = h.getRange(1, 1, 1, h.getLastColumn()).getValues()[0].join('|');
     if (actual !== head.join('|')) {
@@ -455,9 +500,10 @@ function doGet(e) {
   try {
     var accion = (e && e.parameter && e.parameter.action) || '';
     if (accion === 'list') {
-      // ?f=<pestaña> para formularios que no sean el de Cinzano
+      // ?f=<pestaña> y ?form=<formulario> (el formulario define en qué archivo buscar)
       var nombreF = nombreHoja_((e.parameter && e.parameter.f) || HOJA);
-      var h = planilla_().getSheetByName(nombreF);
+      var formF = (e.parameter && e.parameter.form) || '';
+      var h = planillaDe_(formF).getSheetByName(nombreF);
       if (!h) return json_({ ok: true, rows: [] });
       var n = h.getLastRow() - 1;
       var rows = [];
@@ -478,9 +524,13 @@ function doGet(e) {
       // guardar cualquier formulario en su propia pestaña. Sin esto, un formulario
       // genérico apuntando a una versión vieja escribiría filas vacías en Respuestas.
       return json_({
-        ok: true, ping: true, generico: true, version: 'generico-1',
+        ok: true, ping: true, generico: true, archivos: true, version: 'generico-2',
         filas: Math.max(0, hoja_().getLastRow() - 1)
       });
+    }
+    // Links de los archivos que fue creando cada formulario
+    if (accion === 'planillas') {
+      return json_({ ok: true, planillas: planillasConocidas_(), principal: planilla_().getUrl() });
     }
     return json_({ ok: true, info: 'backend relevamiento cinzano' });
   } catch (err) {
