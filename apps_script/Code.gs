@@ -56,12 +56,17 @@ function encabezado_() {
 function colId_() { return encabezado_().length; }          // última columna
 function colRecibido_() { return encabezado_().length - 1; }
 
-function hoja_() {
-  var ss = ID_PLANILLA ? SpreadsheetApp.openById(ID_PLANILLA) : SpreadsheetApp.getActiveSpreadsheet();
-  var h = ss.getSheetByName(HOJA);
-  if (!h) h = ss.insertSheet(HOJA);
+function planilla_() {
+  return ID_PLANILLA ? SpreadsheetApp.openById(ID_PLANILLA) : SpreadsheetApp.getActiveSpreadsheet();
+}
+
+// Devuelve la pestaña, creándola con su encabezado y formatos la primera vez.
+// Sirve para cualquier formulario: el encabezado se lo pasa quien la llama.
+function hojaDe_(nombre, head) {
+  var ss = planilla_();
+  var h = ss.getSheetByName(nombre);
+  if (!h) h = ss.insertSheet(nombre);
   if (h.getLastRow() === 0) {
-    var head = encabezado_();
     h.appendRow(head);
     h.setFrozenRows(1);
     h.getRange(1, 1, 1, head.length).setFontWeight('bold');
@@ -72,17 +77,38 @@ function hoja_() {
     // por API vuelve como fecha 1899-12-30 desfasada por el huso (bajar_respuestas.js
     // igual lo recupera, pero así queda limpio de entrada).
     h.getRange(2, 2, h.getMaxRows() - 1, 1).setNumberFormat('@');
-    h.getRange(2, colRecibido_(), h.getMaxRows() - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
+    h.getRange(2, head.length - 1, h.getMaxRows() - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
     h.setColumnWidth(6, 220);
     h.setColumnWidth(7, 240);
   }
   return h;
 }
 
-function carpetaFotos_() {
-  var it = DriveApp.getFoldersByName(CARPETA_FOTOS);
-  return it.hasNext() ? it.next() : DriveApp.createFolder(CARPETA_FOTOS);
+function hoja_() { return hojaDe_(HOJA, encabezado_()); }
+
+// ---------------- formularios genéricos ----------------
+// El payload trae la definición de las columnas, así un formulario nuevo NO necesita
+// tocar este código ni reimplementar: manda `hoja` y `campos` [{etiqueta, tipo, valor}].
+var PREFIJO = ['Fecha', 'Hora', 'Vendedor cód.', 'Vendedor', 'Cliente cód.', 'Cliente', 'Dirección'];
+var SUFIJO = ['Observaciones', 'Foto', 'Recibido', 'Id'];
+
+function encabezadoGen_(campos) {
+  var head = PREFIJO.slice();
+  for (var i = 0; i < campos.length; i++) head.push(String(campos[i].etiqueta || ('Campo ' + (i + 1))));
+  return head.concat(SUFIJO);
 }
+
+// Nombre de pestaña seguro (Sheets no acepta algunos caracteres)
+function nombreHoja_(s) {
+  var n = String(s || 'Respuestas').replace(/[\[\]\*\/\\\?:]/g, ' ').trim().slice(0, 90);
+  return n || 'Respuestas';
+}
+
+function carpeta_(nombre) {
+  var it = DriveApp.getFoldersByName(nombre);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(nombre);
+}
+function carpetaFotos_() { return carpeta_(CARPETA_FOTOS); }
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
@@ -90,10 +116,11 @@ function json_(obj) {
 }
 
 // ¿ya se insertó este envío? (la cola offline puede reenviar algo que sí llegó)
-function yaExiste_(h, id) {
+// La columna Id es siempre la última del encabezado de esa pestaña.
+function yaExiste_(h, id, colId) {
   var n = h.getLastRow() - 1;
   if (n <= 0) return false;
-  var ids = h.getRange(2, colId_(), n, 1).getValues();
+  var ids = h.getRange(2, colId || h.getLastColumn(), n, 1).getValues();
   for (var i = ids.length - 1; i >= 0; i--) {          // desde el final: los reenvíos son recientes
     if (String(ids[i][0]) === id) return true;
   }
@@ -261,18 +288,22 @@ function doPost(e) {
     if (CLAVE && String((p && p.clave) || '') !== CLAVE) return json_({ ok: false, error: 'clave inválida' });
 
     // Descarga de todo lo relevado (la usa bajar_respuestas.js para armar el Excel).
-    // Va por POST para no pasar la clave en la URL.
+    // Va por POST para no pasar la clave en la URL. `hoja` elige el formulario.
     if (p && p.accion === 'export') {
-      var hx = hoja_();
-      var enc = encabezado_();
+      var nomb = nombreHoja_(p.hoja || HOJA);
+      var ssx = planilla_();
+      var hx = ssx.getSheetByName(nomb);
+      if (!hx) return json_({ ok: true, encabezado: [], filas: [], vacia: true });
+      var nCols = hx.getLastColumn();
+      var enc = hx.getRange(1, 1, 1, nCols).getValues()[0];
       var nf = hx.getLastRow() - 1;
       var filas = [];
       if (nf > 0) {
         // getValues (no getDisplayValues): los números viajan como números y no
         // dependen de la configuración regional de la planilla. Las dos columnas de
         // fecha se formatean acá, con la zona horaria del script.
-        var vals = hx.getRange(2, 1, nf, enc.length).getValues();
-        var iRec = colRecibido_() - 1;
+        var vals = hx.getRange(2, 1, nf, nCols).getValues();
+        var iRec = nCols - 2;                    // ..., Recibido, Id
         for (var k = 0; k < vals.length; k++) {
           var f = vals[k];
           if (f[0] instanceof Date) f[0] = Utilities.formatDate(f[0], TZ, 'dd/MM/yyyy');
@@ -284,6 +315,9 @@ function doPost(e) {
     }
 
     if (!p || !p.clienteCod || !p.vendedorCod) return json_({ ok: false, error: 'payload incompleto' });
+
+    // Formulario genérico: el payload define las columnas y la pestaña destino.
+    if (p.campos) return altaGenerica_(p);
 
     var id = String(p._id || ((p._k || '') + '|' + (p.fecha || '')));
     var cache = CacheService.getScriptCache();
@@ -337,7 +371,7 @@ function doPost(e) {
     if (!lock.tryLock(30000)) return json_({ ok: false, error: 'servidor ocupado', reintentar: true });
     try {
       var h = hoja_();
-      if (yaExiste_(h, id)) {
+      if (yaExiste_(h, id, colId_())) {
         cache.put('id:' + id, '1', 21600);
         return json_({ ok: true, dup: true });
       }
@@ -354,11 +388,77 @@ function doPost(e) {
   }
 }
 
+// Alta de cualquier formulario definido por el payload (hoja + campos).
+// Mismas garantías que el camino de Cinzano: idempotencia por _id, fecha del
+// relevamiento, foto fuera del lock y lock sólo alrededor del appendRow.
+function altaGenerica_(p) {
+  var id = String(p._id || ((p._k || '') + '|' + (p.fecha || '')));
+  var cache = CacheService.getScriptCache();
+  if (cache.get('id:' + id)) return json_({ ok: true, dup: true });
+
+  var campos = p.campos || [];
+  var head = encabezadoGen_(campos);
+  var nomb = nombreHoja_(p.hoja || HOJA);
+
+  var recibido = new Date();
+  var fechaRel = p.fecha ? new Date(p.fecha) : recibido;
+  if (isNaN(fechaRel.getTime())) fechaRel = recibido;
+
+  var fotoUrl = '';
+  if (p.foto && String(p.foto).indexOf('data:image') === 0) {
+    try {
+      var b64 = String(p.foto).split(',')[1];
+      var blob = Utilities.newBlob(Utilities.base64Decode(b64), 'image/jpeg',
+        'cli' + p.clienteCod + '_' + Utilities.formatDate(fechaRel, TZ, 'yyyyMMdd_HHmmss') + '_' + id.slice(0, 8) + '.jpg');
+      fotoUrl = carpeta_(p.carpetaFotos || (nomb + ' - Fotos')).createFile(blob).getUrl();
+    } catch (err) {
+      fotoUrl = 'ERROR al subir la foto: ' + err;
+    }
+  }
+
+  var fila = [
+    fechaRel,
+    Utilities.formatDate(fechaRel, TZ, 'HH:mm'),
+    p.vendedorCod, p.vendedor || '',
+    p.clienteCod, p.cliente || '', p.direccion || ''
+  ];
+  for (var i = 0; i < campos.length; i++) {
+    var c = campos[i], v = c.valor;
+    if (v === '' || v === null || v === undefined) fila.push('');
+    else if (c.tipo === 'monto' || c.tipo === 'numero') fila.push(Number(v));
+    else fila.push(String(v));
+  }
+  fila.push(p.obs || '', fotoUrl, recibido, id);
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return json_({ ok: false, error: 'servidor ocupado', reintentar: true });
+  try {
+    var h = hojaDe_(nomb, head);
+    // Si el formulario cambió de columnas, no mezclar datos viejos con nuevos.
+    var actual = h.getRange(1, 1, 1, h.getLastColumn()).getValues()[0].join('|');
+    if (actual !== head.join('|')) {
+      return json_({ ok: false, error: 'las columnas de la pestaña "' + nomb + '" no coinciden con el formulario' });
+    }
+    if (yaExiste_(h, id, head.length)) {
+      cache.put('id:' + id, '1', 21600);
+      return json_({ ok: true, dup: true });
+    }
+    h.appendRow(fila);
+    cache.put('id:' + id, '1', 21600);
+    return json_({ ok: true });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function doGet(e) {
   try {
     var accion = (e && e.parameter && e.parameter.action) || '';
     if (accion === 'list') {
-      var h = hoja_();
+      // ?f=<pestaña> para formularios que no sean el de Cinzano
+      var nombreF = nombreHoja_((e.parameter && e.parameter.f) || HOJA);
+      var h = planilla_().getSheetByName(nombreF);
+      if (!h) return json_({ ok: true, rows: [] });
       var n = h.getLastRow() - 1;
       var rows = [];
       if (n > 0) {
@@ -374,7 +474,13 @@ function doGet(e) {
       return json_({ ok: true, rows: rows });
     }
     if (accion === 'ping') {
-      return json_({ ok: true, ping: true, filas: Math.max(0, hoja_().getLastRow() - 1) });
+      // `generico: true` le dice a los formularios nuevos que esta versión ya sabe
+      // guardar cualquier formulario en su propia pestaña. Sin esto, un formulario
+      // genérico apuntando a una versión vieja escribiría filas vacías en Respuestas.
+      return json_({
+        ok: true, ping: true, generico: true, version: 'generico-1',
+        filas: Math.max(0, hoja_().getLastRow() - 1)
+      });
     }
     return json_({ ok: true, info: 'backend relevamiento cinzano' });
   } catch (err) {
