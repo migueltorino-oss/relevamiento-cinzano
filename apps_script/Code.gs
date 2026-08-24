@@ -64,7 +64,7 @@ function planilla_() {
 // propiedades del script la primera vez y se reusa siempre; si el archivo no existe
 // todavía, se crea solo (no hay que crearlo a mano ni hardcodear ningún id).
 // Sin `formulario` (el caso de Cinzano) usa la planilla original.
-function planillaDe_(formId, nombreArchivo) {
+function planillaDe_(formId, nombreArchivo, crear) {
   if (!formId) return planilla_();
   var props = PropertiesService.getScriptProperties();
   var clave = 'planilla_' + String(formId);
@@ -73,6 +73,9 @@ function planillaDe_(formId, nombreArchivo) {
     try { return SpreadsheetApp.openById(id); }
     catch (err) { props.deleteProperty(clave); }   // la borraron: se crea de nuevo
   }
+  // Solo el ALTA crea el archivo: si lo creara una lectura (?action=list llega antes
+  // del primer envio) quedaria con el nombre de fallback y una "Hoja 1" vacia.
+  if (crear === false) return null;
   var ss = SpreadsheetApp.create(nombreArchivo || ('Relevamiento ' + formId));
   props.setProperty(clave, ss.getId());
   return ss;
@@ -335,8 +338,8 @@ function doPost(e) {
     // Va por POST para no pasar la clave en la URL. `hoja` elige el formulario.
     if (p && p.accion === 'export') {
       var nomb = nombreHoja_(p.hoja || HOJA);
-      var ssx = planillaDe_(p.formulario, p.archivo);
-      var hx = ssx.getSheetByName(nomb);
+      var ssx = planillaDe_(p.formulario, p.archivo, false);
+      var hx = ssx ? ssx.getSheetByName(nomb) : null;
       if (!hx) return json_({ ok: true, encabezado: [], filas: [], vacia: true });
       var nCols = hx.getLastColumn();
       var enc = hx.getRange(1, 1, 1, nCols).getValues()[0];
@@ -503,7 +506,8 @@ function doGet(e) {
       // ?f=<pestaña> y ?form=<formulario> (el formulario define en qué archivo buscar)
       var nombreF = nombreHoja_((e.parameter && e.parameter.f) || HOJA);
       var formF = (e.parameter && e.parameter.form) || '';
-      var h = planillaDe_(formF).getSheetByName(nombreF);
+      var ssL = planillaDe_(formF, null, false);
+      var h = ssL ? ssL.getSheetByName(nombreF) : null;
       if (!h) return json_({ ok: true, rows: [] });
       var n = h.getLastRow() - 1;
       var rows = [];
@@ -524,7 +528,7 @@ function doGet(e) {
       // guardar cualquier formulario en su propia pestaña. Sin esto, un formulario
       // genérico apuntando a una versión vieja escribiría filas vacías en Respuestas.
       return json_({
-        ok: true, ping: true, generico: true, archivos: true, version: 'generico-2',
+        ok: true, ping: true, generico: true, archivos: true, version: 'generico-3',
         filas: Math.max(0, hoja_().getLastRow() - 1)
       });
     }
